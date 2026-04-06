@@ -5,7 +5,7 @@ A from-scratch implementation of the [Raft](https://raft.github.io/raft.pdf) dis
 <br/>
 
 <div align="center">
-  <video src="raft.mp4" autoplay loop muted playsinline width="90%"></video>
+  <video src="https://github.com/user-attachments/assets/74b16ebe-3a12-4acb-b604-aa757578adc0" autoplay loop muted playsinline width="90%"></video>
 </div>
 
 <br/>
