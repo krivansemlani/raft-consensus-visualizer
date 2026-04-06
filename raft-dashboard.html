@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Raft Consensus — Live Cluster</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --cream: #FAF7F2;
+    --paper: #F2EDE4;
+    --ink: #1A1612;
+    --ink-light: #6B6460;
+    --ink-faint: #C4BDB6;
+    --gold: #C8922A;
+    --gold-light: #F5E6C8;
+    --green: #2A7A4B;
+    --green-light: #D4EDE0;
+    --red: #C43030;
+    --red-light: #F5D4D4;
+    --blue: #2A4A8A;
+    --blue-light: #D4DCF0;
+    --shadow: 0 2px 12px rgba(26,22,18,0.08);
+    --shadow-lg: 0 8px 40px rgba(26,22,18,0.12);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    background: var(--cream);
+    color: var(--ink);
+    font-family: 'DM Sans', sans-serif;
+    overflow: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(26,22,18,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(26,22,18,0.025) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 28px 32px 0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    padding-bottom: 18px;
+    border-bottom: 1.5px solid var(--ink-faint);
+    flex-shrink: 0;
+  }
+
+  .header-left h1 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 2.2rem;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+  }
+
+  .header-left h1 em { font-style: italic; color: var(--gold); }
+
+  .header-left p {
+    margin-top: 5px;
+    font-size: 0.82rem;
+    color: var(--ink-light);
+    letter-spacing: 0.01em;
+  }
+
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--paper);
+    border: 1px solid var(--ink-faint);
+    border-radius: 100px;
+    padding: 8px 16px;
+    font-size: 0.78rem;
+    font-family: 'DM Mono', monospace;
+    color: var(--ink-light);
+  }
+
+  .status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--red);
+    transition: background 0.3s;
+  }
+
+  .status-dot.connected { background: var(--green); animation: blink 2s ease-in-out infinite; }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  /* ── Layout ── */
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 24px;
+    align-items: start;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding-bottom: 20px;
+  }
+
+  /* Both columns scroll independently inside the viewport */
+  .grid > .card {
+    overflow-y: auto;
+    max-height: 100%;
+    scrollbar-width: none;
+  }
+
+  .grid > .card::-webkit-scrollbar { display: none; }
+
+  .right-panel {
+    overflow-y: auto;
+    max-height: 100%;
+    scrollbar-width: none;
+  }
+
+  .right-panel::-webkit-scrollbar { display: none; }
+
+  .card {
+    background: white;
+    border: 1px solid var(--ink-faint);
+    border-radius: 16px;
+    padding: 26px;
+    box-shadow: var(--shadow);
+  }
+
+  .card-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-light);
+    margin-bottom: 18px;
+  }
+
+  /* ── Cluster SVG ── */
+  .cluster-visual {
+    position: relative;
+    height: 300px;
+    margin-bottom: 20px;
+  }
+
+  svg#cluster-svg { width: 100%; height: 100%; }
+
+  .conn-line {
+    stroke: var(--ink-faint);
+    stroke-width: 1;
+    stroke-dasharray: 4 4;
+    opacity: 0.5;
+    transition: stroke 0.4s, opacity 0.4s;
+  }
+
+  .conn-line.active {
+    stroke: var(--gold);
+    stroke-width: 2;
+    stroke-dasharray: 8 5;
+    opacity: 0.65;
+    animation: flowLine 1.2s linear infinite;
+  }
+
+  @keyframes flowLine {
+    from { stroke-dashoffset: 13; }
+    to { stroke-dashoffset: 0; }
+  }
+
+  .node-group { cursor: pointer; }
+
+  .node-ring {
+    fill: none;
+    stroke-width: 2.5;
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+
+  .node-ring.leader-ring {
+    animation: leaderPulse 2s ease-in-out infinite;
+  }
+
+  @keyframes leaderPulse {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 0.07; }
+  }
+
+  .node-circle {
+    transition: fill 0.35s, stroke 0.35s;
+  }
+
+  .node-circle.candidate-pulse {
+    animation: candidatePulse 0.75s ease-in-out infinite alternate;
+  }
+
+  @keyframes candidatePulse {
+    from { opacity: 0.65; }
+    to { opacity: 1; }
+  }
+
+  .node-id {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    text-anchor: middle;
+    dominant-baseline: middle;
+    pointer-events: none;
+    transition: fill 0.35s;
+  }
+
+  .node-term {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    text-anchor: middle;
+    fill: var(--ink-light);
+    pointer-events: none;
+  }
+
+  /* ── Node list ── */
+  .nodes-list { display: flex; flex-direction: column; gap: 5px; }
+
+  .node-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    background: var(--cream);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    transition: border-color 0.2s;
+  }
+
+  .node-row:hover { border-color: var(--ink-faint); }
+
+  .node-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: background 0.3s;
+  }
+
+  .node-row-name {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.78rem;
+    font-weight: 500;
+    min-width: 56px;
+  }
+
+  .node-badge {
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    border-radius: 100px;
+  }
+
+  .badge-leader    { background: var(--gold-light);  color: var(--gold);  }
+  .badge-follower  { background: var(--green-light); color: var(--green); }
+  .badge-candidate { background: var(--blue-light);  color: var(--blue);  }
+  .badge-dead      { background: var(--red-light);   color: var(--red);   }
+
+  .node-row-meta {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-family: 'DM Mono', monospace;
+  }
+
+  .meta-item { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+  .meta-val  { font-size: 0.82rem; color: var(--ink); font-weight: 500; }
+  .meta-key  { font-size: 0.58rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-light); }
+
+  .kill-btn {
+    width: 26px; height: 26px;
+    border-radius: 6px;
+    border: 1px solid var(--ink-faint);
+    background: white;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px;
+    color: var(--ink-light);
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+
+  .kill-btn:hover          { border-color: var(--red);   color: var(--red);   background: var(--red-light);   }
+  .kill-btn.revive:hover   { border-color: var(--green); color: var(--green); background: var(--green-light); }
+
+  /* ── Right panel ── */
+  .right-panel { display: flex; flex-direction: column; gap: 18px; }
+
+  .term-display { text-align: center; padding: 16px 26px; }
+
+  .term-number {
+    font-family: 'DM Serif Display', serif;
+    font-size: 3rem;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    transition: color 0.3s;
+  }
+
+  .term-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-light);
+    margin-top: 4px;
+  }
+
+  .leader-display {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--paper);
+    font-size: 0.8rem;
+    color: var(--ink-light);
+  }
+
+  .leader-display strong { color: var(--gold); font-family: 'DM Mono', monospace; }
+
+  /* ── Command ── */
+  .command-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+
+  .preset-btn {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+    padding: 5px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--ink-faint);
+    background: var(--cream);
+    color: var(--ink);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .preset-btn:hover { border-color: var(--gold); background: var(--gold-light); color: var(--gold); }
+
+  .command-input-row { display: flex; gap: 8px; }
+
+  .command-input {
+    flex: 1;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.78rem;
+    padding: 9px 13px;
+    border: 1px solid var(--ink-faint);
+    border-radius: 8px;
+    background: var(--cream);
+    color: var(--ink);
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .command-input:focus { border-color: var(--gold); }
+
+  .send-btn {
+    padding: 9px 15px;
+    background: var(--ink);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.78rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .send-btn:hover { background: var(--gold); }
+
+  /* ── Log viz ── */
+  .log-viz { display: flex; flex-direction: column; gap: 7px; }
+
+  .log-row { display: flex; align-items: center; gap: 8px; }
+
+  .log-node-id {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--ink-light);
+    width: 42px;
+    flex-shrink: 0;
+  }
+
+  .log-entries { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+
+  .log-entry {
+    width: 26px; height: 26px;
+    border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.58rem;
+    font-weight: 500;
+    cursor: default;
+    transition: background 0.4s, border-color 0.4s, color 0.4s;
+    animation: popIn 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+    border: 1.5px solid;
+  }
+
+  @keyframes popIn {
+    from { transform: scale(0); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
+  }
+
+  .log-empty {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--ink-faint);
+  }
+
+  /* ── Event log ── */
+  .event-log {
+    max-height: 160px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .event-log::-webkit-scrollbar { width: 3px; }
+  .event-log::-webkit-scrollbar-track { background: var(--paper); border-radius: 2px; }
+  .event-log::-webkit-scrollbar-thumb { background: var(--ink-faint); border-radius: 2px; }
+
+  .event-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 7px 10px;
+    background: var(--cream);
+    border-radius: 6px;
+    animation: slideIn 0.25s ease;
+  }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(-6px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+
+  .event-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-top: 4px;
+  }
+
+  .event-time {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.62rem;
+    color: var(--ink-faint);
+    white-space: nowrap;
+    margin-top: 1px;
+  }
+
+  .event-text {
+    font-size: 0.73rem;
+    color: var(--ink-light);
+    line-height: 1.4;
+  }
+
+  .event-text strong { color: var(--ink); }
+
+  /* ── Disconnected banner ── */
+  .disconnected-banner {
+    display: none;
+    position: fixed;
+    top: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--red);
+    color: white;
+    padding: 9px 20px;
+    border-radius: 100px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    z-index: 100;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .disconnected-banner.show { display: block; }
+</style>
+</head>
+<body>
+
+<div class="disconnected-banner" id="disconnected">⚡ Disconnected — reconnecting...</div>
+
+<div class="container">
+  <header>
+    <div class="header-left">
+      <h1>Raft <em>Consensus</em></h1>
+      <p>Live distributed cluster · 5 nodes · Go backend · Raft §5</p>
+    </div>
+    <div class="status-pill">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">connecting...</span>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- Left: topology + node list -->
+    <div class="card">
+      <div class="card-label">Cluster Topology</div>
+      <div class="cluster-visual">
+        <svg id="cluster-svg" viewBox="0 0 600 310"></svg>
+      </div>
+      <div class="card-label" style="margin-top:4px">Node Status</div>
+      <div class="nodes-list" id="nodes-list"></div>
+    </div>
+
+    <!-- Right panel -->
+    <div class="right-panel">
+
+      <!-- Term + leader -->
+      <div class="card term-display">
+        <div class="card-label">Current Term</div>
+        <div class="term-number" id="term-number">—</div>
+        <div class="term-label">term</div>
+        <div class="leader-display" id="leader-display">
+          <span style="color:var(--ink-faint)">Waiting for leader...</span>
+        </div>
+      </div>
+
+      <!-- Send command -->
+      <div class="card">
+        <div class="card-label">Send Command</div>
+        <div class="command-presets">
+          <button class="preset-btn" onclick="sendCommand('set x = 5')">set x = 5</button>
+          <button class="preset-btn" onclick="sendCommand('set y = 3')">set y = 3</button>
+          <button class="preset-btn" onclick="sendCommand('set z = 9')">set z = 9</button>
+          <button class="preset-btn" onclick="sendCommand('delete x')">delete x</button>
+          <button class="preset-btn" onclick="sendCommand('incr x')">incr x</button>
+        </div>
+        <div class="command-input-row">
+          <input class="command-input" id="command-input" placeholder="set key = value" />
+          <button class="send-btn" onclick="sendCustomCommand()">Send</button>
+        </div>
+      </div>
+
+      <!-- Replicated log -->
+      <div class="card">
+        <div class="card-label">Replicated Log <span style="font-weight:400;color:var(--ink-faint);font-size:0.6rem;letter-spacing:0.04em">— green=committed · gold=uncommitted</span></div>
+        <div class="log-viz" id="log-viz"></div>
+      </div>
+
+      <!-- Event stream -->
+      <div class="card">
+        <div class="card-label">Event Stream</div>
+        <div class="event-log" id="event-log">
+          <div class="event-item">
+            <div class="event-dot" style="background:var(--ink-faint)"></div>
+            <span class="event-time">—</span>
+            <span class="event-text">Waiting for cluster...</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+// Pentagon node positions in SVG viewBox 600×330
+// Regular pentagon: center (300, 168), radius 130
+// angles: -90°, -18°, 54°, 126°, 198° (clockwise from top)
+const positions = [
+  { x: 300, y: 38  },  // node 0 — top      (-90°)
+  { x: 524, y: 128 },  // node 1 — right     (-18°: cos=0.951, sin=-0.309)
+  { x: 437, y: 273 },  // node 2 — bot-right (54°:  cos=0.588, sin=0.809)
+  { x: 163, y: 273 },  // node 3 — bot-left  (126°: cos=-0.588, sin=0.809)
+  { x: 76,  y: 128 },  // node 4 — left      (198°: cos=-0.951, sin=-0.309)
+];
+
+const colors = {
+  leader:    { fill: '#F5E6C8', stroke: '#C8922A', text: '#C8922A' },
+  follower:  { fill: '#D4EDE0', stroke: '#2A7A4B', text: '#2A7A4B' },
+  candidate: { fill: '#D4DCF0', stroke: '#2A4A8A', text: '#2A4A8A' },
+  dead:      { fill: '#EDEBE8', stroke: '#C4BDB6', text: '#C4BDB6' },
+};
+
+let prevState = [];
+let ws = null;
+// Track how many log entries we've rendered per node (to avoid rebuild / blink)
+const renderedLogLengths = {};
+// Track whether a node was previously dead (for animation)
+const wasDeadMap = {};
+
+// ── WebSocket connection ──────────────────────────────────────────────────────
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const host  = location.host || 'localhost:8081';
+  ws = new WebSocket(`${proto}//${host}/ws`);
+
+  ws.onopen = () => {
+    document.getElementById('status-dot').className = 'status-dot connected';
+    document.getElementById('status-text').textContent = 'live';
+    document.getElementById('disconnected').classList.remove('show');
+    prevState = [];
+    initSVG();
+    addEvent('Connected to cluster', '#6B6460');
+  };
+
+  ws.onmessage = (e) => {
+    const nodes = JSON.parse(e.data);
+    updateDashboard(nodes);
+  };
+
+  ws.onclose = () => {
+    document.getElementById('status-dot').className = 'status-dot';
+    document.getElementById('status-text').textContent = 'disconnected';
+    document.getElementById('disconnected').classList.add('show');
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+// ── SVG init — called once on connect ────────────────────────────────────────
+
+function initSVG() {
+  const svg = document.getElementById('cluster-svg');
+  svg.innerHTML = '';
+
+  // Connection lines between all node pairs
+  for (let i = 0; i < 5; i++) {
+    for (let j = i + 1; j < 5; j++) {
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', positions[i].x);
+      line.setAttribute('y1', positions[i].y);
+      line.setAttribute('x2', positions[j].x);
+      line.setAttribute('y2', positions[j].y);
+      line.setAttribute('class', 'conn-line');
+      line.setAttribute('id', `line-${i}-${j}`);
+      svg.appendChild(line);
+    }
+  }
+
+  // Node groups
+  for (let i = 0; i < 5; i++) {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('class', 'node-group');
+    g.setAttribute('id', `node-g-${i}`);
+    g.onclick = () => toggleNode(i);
+
+    // Outer ring (leader pulse)
+    const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    ring.setAttribute('cx', positions[i].x);
+    ring.setAttribute('cy', positions[i].y);
+    ring.setAttribute('r', 46);
+    ring.setAttribute('class', 'node-ring');
+    ring.setAttribute('id', `ring-${i}`);
+
+    // Main circle
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', positions[i].x);
+    circle.setAttribute('cy', positions[i].y);
+    circle.setAttribute('r', 32);
+    circle.setAttribute('class', 'node-circle');
+    circle.setAttribute('id', `circle-${i}`);
+
+    // Node number
+    const idText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    idText.setAttribute('x', positions[i].x);
+    idText.setAttribute('y', positions[i].y - 2);
+    idText.setAttribute('class', 'node-id');
+    idText.setAttribute('id', `id-text-${i}`);
+    idText.textContent = i;
+
+    // Term label below number
+    const termText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    termText.setAttribute('x', positions[i].x);
+    termText.setAttribute('y', positions[i].y + 17);
+    termText.setAttribute('class', 'node-term');
+    termText.setAttribute('id', `term-text-${i}`);
+    termText.textContent = 't0';
+
+    g.appendChild(ring);
+    g.appendChild(circle);
+    g.appendChild(idText);
+    g.appendChild(termText);
+    svg.appendChild(g);
+  }
+}
+
+// ── Main update — runs every 100ms from WebSocket ─────────────────────────────
+
+function updateDashboard(nodes) {
+  // Compute max term and current leader
+  let maxTerm = 0;
+  let leader = null;
+  nodes.forEach(n => {
+    if (n.currentTerm > maxTerm) maxTerm = n.currentTerm;
+    if (n.state === 'leader' && !n.dead) leader = n;
+  });
+
+  // Header stats
+  document.getElementById('term-number').textContent = maxTerm;
+  const leaderEl = document.getElementById('leader-display');
+  if (leader) {
+    leaderEl.innerHTML = `Leader: <strong>Node ${leader.id}</strong>`;
+  } else {
+    const electing = nodes.some(n => n.state === 'candidate' && !n.dead);
+    leaderEl.innerHTML = electing
+      ? `<span style="color:var(--blue)">Electing new leader...</span>`
+      : `<span style="color:var(--ink-faint)">No leader</span>`;
+  }
+
+  // Reset all connection lines, then highlight active ones from leader
+  document.querySelectorAll('.conn-line').forEach(l => l.setAttribute('class', 'conn-line'));
+  if (leader) {
+    nodes.forEach(n => {
+      if (!n.dead && n.id !== leader.id) {
+        const a = Math.min(n.id, leader.id);
+        const b = Math.max(n.id, leader.id);
+        const line = document.getElementById(`line-${a}-${b}`);
+        if (line) line.setAttribute('class', 'conn-line active');
+      }
+    });
+  }
+
+  // Update SVG nodes
+  nodes.forEach(n => {
+    const state = n.dead ? 'dead' : n.state;
+    const c = colors[state] || colors.follower;
+
+    const circle = document.getElementById(`circle-${n.id}`);
+    const ring   = document.getElementById(`ring-${n.id}`);
+    const idText = document.getElementById(`id-text-${n.id}`);
+    const termT  = document.getElementById(`term-text-${n.id}`);
+
+    if (circle) {
+      circle.setAttribute('fill', c.fill);
+      circle.setAttribute('stroke', c.stroke);
+      circle.setAttribute('stroke-width', n.dead ? '1.5' : '2');
+      circle.setAttribute('r', n.dead ? '26' : '32');
+      // Candidate gets pulsing animation class
+      if (state === 'candidate') {
+        circle.setAttribute('class', 'node-circle candidate-pulse');
+      } else {
+        circle.setAttribute('class', 'node-circle');
+      }
+    }
+
+    if (ring) {
+      ring.setAttribute('stroke', c.stroke);
+      if (state === 'leader') {
+        ring.setAttribute('class', 'node-ring leader-ring');
+        ring.setAttribute('opacity', '0.25');
+      } else {
+        ring.setAttribute('class', 'node-ring');
+        ring.setAttribute('opacity', '0');
+      }
+    }
+
+    if (idText) idText.setAttribute('fill', c.text);
+    if (termT)  termT.textContent = `t${n.currentTerm}`;
+  });
+
+  updateNodeList(nodes);
+  updateLogViz(nodes);
+  detectChanges(nodes);
+
+  prevState = nodes.map(n => ({ ...n }));
+}
+
+// ── Node list — rows created once, updated in-place (no blink) ───────────────
+
+function updateNodeList(nodes) {
+  const list = document.getElementById('nodes-list');
+  nodes.forEach(n => {
+    const state = n.dead ? 'dead' : n.state;
+    const c = colors[state] || colors.follower;
+
+    let row = document.getElementById(`node-row-${n.id}`);
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'node-row';
+      row.id = `node-row-${n.id}`;
+      row.innerHTML = `
+        <div class="node-dot" id="dot-${n.id}"></div>
+        <div class="node-row-name">Node ${n.id}</div>
+        <span class="node-badge" id="badge-${n.id}"></span>
+        <div class="node-row-meta">
+          <div class="meta-item">
+            <span class="meta-val" id="meta-term-${n.id}"></span>
+            <span class="meta-key">term</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-val" id="meta-log-${n.id}"></span>
+            <span class="meta-key">log</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-val" id="meta-ci-${n.id}"></span>
+            <span class="meta-key">commit</span>
+          </div>
+        </div>
+        <button class="kill-btn" id="btn-${n.id}">×</button>
+      `;
+      // Append first so the element is in the DOM, then wire up the button
+      list.appendChild(row);
+      row.querySelector('.kill-btn').onclick = (e) => {
+        e.stopPropagation();
+        toggleNode(n.id);
+      };
+    }
+
+    // In-place updates only
+    const dot    = document.getElementById(`dot-${n.id}`);
+    const badge  = document.getElementById(`badge-${n.id}`);
+    const termEl = document.getElementById(`meta-term-${n.id}`);
+    const logEl  = document.getElementById(`meta-log-${n.id}`);
+    const ciEl   = document.getElementById(`meta-ci-${n.id}`);
+    const btn    = document.getElementById(`btn-${n.id}`);
+
+    if (dot)    dot.style.background = c.stroke;
+    if (badge)  { badge.className = `node-badge badge-${state}`; badge.textContent = state; }
+    if (termEl) termEl.textContent = n.currentTerm;
+    if (logEl)  logEl.textContent  = n.logLength;
+    if (ciEl)   ciEl.textContent   = n.commitIndex >= 0 ? n.commitIndex : '—';
+    if (btn) {
+      btn.className = n.dead ? 'kill-btn revive' : 'kill-btn';
+      btn.textContent = n.dead ? '↑' : '×';
+      btn.title = n.dead ? 'Revive node' : 'Kill node';
+    }
+  });
+}
+
+// ── Log viz — entries added only when new, never rebuilt ─────────────────────
+
+function updateLogViz(nodes) {
+  const viz = document.getElementById('log-viz');
+
+  nodes.forEach(n => {
+    let row = document.getElementById(`log-row-${n.id}`);
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'log-row';
+      row.id = `log-row-${n.id}`;
+      row.innerHTML = `
+        <div class="log-node-id">N${n.id}</div>
+        <div class="log-entries" id="log-entries-${n.id}"></div>
+      `;
+      viz.appendChild(row);
+      renderedLogLengths[n.id] = 0;
+    }
+
+    const container = document.getElementById(`log-entries-${n.id}`);
+    if (!container) return;
+
+    const logData = n.log || [];
+    const rendered = renderedLogLengths[n.id] || 0;
+
+    // Show "empty" placeholder only when truly empty
+    if (logData.length === 0 && rendered === 0) {
+      if (!container.querySelector('.log-empty')) {
+        container.innerHTML = '<span class="log-empty">empty</span>';
+      }
+      return;
+    }
+
+    // Remove "empty" placeholder if we have entries now
+    const emptyEl = container.querySelector('.log-empty');
+    if (emptyEl) emptyEl.remove();
+
+    // Append only NEW entries — animation plays only for new ones
+    for (let i = rendered; i < logData.length; i++) {
+      const e = logData[i];
+      const el = document.createElement('div');
+      el.className = 'log-entry';
+      el.id = `log-entry-${n.id}-${i}`;
+      el.textContent = i;
+      el.title = `[${i}] ${e.command}  (term ${e.term})`;
+      container.appendChild(el);
+    }
+    renderedLogLengths[n.id] = logData.length;
+
+    // Update committed/uncommitted coloring for all entries (no animation, just style)
+    for (let i = 0; i < logData.length; i++) {
+      const el = document.getElementById(`log-entry-${n.id}-${i}`);
+      if (!el) continue;
+      const committed = i <= n.commitIndex;
+      el.style.background    = committed ? 'var(--green-light)' : 'var(--gold-light)';
+      el.style.borderColor   = committed ? 'var(--green)'       : 'var(--gold)';
+      el.style.color         = committed ? 'var(--green)'       : 'var(--gold)';
+    }
+  });
+}
+
+// ── Event detection ───────────────────────────────────────────────────────────
+
+function detectChanges(nodes) {
+  if (prevState.length === 0) return;
+  nodes.forEach(n => {
+    const prev = prevState.find(p => p.id === n.id);
+    if (!prev) return;
+
+    if (n.state === 'leader' && prev.state !== 'leader' && !n.dead) {
+      addEvent(`Node ${n.id} elected leader`, '#C8922A');
+    }
+    if (n.dead && !prev.dead) {
+      addEvent(`Node ${n.id} went offline`, '#C43030');
+    }
+    if (!n.dead && prev.dead) {
+      addEvent(`Node ${n.id} came back online`, '#2A7A4B');
+    }
+    if (n.state === 'candidate' && prev.state !== 'candidate' && !n.dead) {
+      addEvent(`Node ${n.id} started election (term ${n.currentTerm})`, '#2A4A8A');
+    }
+    if (n.commitIndex > prev.commitIndex && !n.dead) {
+      addEvent(`Node ${n.id} committed → index ${n.commitIndex}`, '#2A7A4B');
+    }
+    if (n.logLength > prev.logLength && n.state === 'leader') {
+      const cmd = (n.log && n.log[n.logLength - 1]) ? n.log[n.logLength - 1].command : '?';
+      addEvent(`Leader replicated: <strong>"${cmd}"</strong>`, '#2A4A8A');
+    }
+  });
+}
+
+function addEvent(text, color) {
+  const log = document.getElementById('event-log');
+  // Remove static placeholder on first real event
+  if (log.children.length === 1 && log.children[0]?.querySelector?.('.event-time')?.textContent === '—') {
+    log.innerHTML = '';
+  }
+  const now = new Date();
+  const ts = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
+
+  const item = document.createElement('div');
+  item.className = 'event-item';
+  item.innerHTML = `
+    <div class="event-dot" style="background:${color}"></div>
+    <span class="event-time">${ts}</span>
+    <span class="event-text">${text}</span>
+  `;
+  log.insertBefore(item, log.firstChild);
+  while (log.children.length > 50) log.removeChild(log.lastChild);
+}
+
+// ── Kill / Revive ─────────────────────────────────────────────────────────────
+
+function toggleNode(id) {
+  const node = prevState.find(n => n.id === id);
+  if (!node) return;
+  const action = node.dead ? 'revive' : 'kill';
+  fetch(`/${action}/${id}`, { method: 'POST' })
+    .catch(() => addEvent(`Failed to ${action} Node ${id}`, '#C43030'));
+}
+
+// ── Commands ──────────────────────────────────────────────────────────────────
+
+function sendCommand(cmd) {
+  fetch(`/command/${encodeURIComponent(cmd)}`, { method: 'POST' })
+    .then(r => {
+      if (!r.ok) throw new Error('no leader');
+      return r.text();
+    })
+    .then(() => addEvent(`Sent command: <strong>"${cmd}"</strong>`, '#6B6460'))
+    .catch(() => addEvent('No leader available — try again', '#C43030'));
+}
+
+function sendCustomCommand() {
+  const input = document.getElementById('command-input');
+  const cmd = input.value.trim();
+  if (!cmd) return;
+  sendCommand(cmd);
+  input.value = '';
+}
+
+document.getElementById('command-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') sendCustomCommand();
+});
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+connect();
+</script>
+</body>
+</html>
